@@ -683,6 +683,7 @@ class EngineCoreProc(EngineCore):
         signal.signal(signal.SIGINT, signal_handler)
 
         engine_core: Optional[EngineCoreProc] = None
+        logger.warning("Initializing engine cores")
         try:
             parallel_config: ParallelConfig = kwargs[
                 "vllm_config"].parallel_config
@@ -694,9 +695,12 @@ class EngineCoreProc(EngineCore):
                 parallel_config.data_parallel_rank_local = local_dp_rank
                 engine_core = DPEngineCoreProc(*args, **kwargs)
             else:
+                logger.warning("init disagg engine core")
                 set_process_title("EngineCore")
                 decorate_logs()
-                engine_core = EngineCoreProc(*args, **kwargs)
+                from tpu_commons.core.core_tpu import DisaggEngineCoreProc
+                engine_core = DisaggEngineCoreProc(*args, **kwargs)
+                # engine_core = EngineCoreProc(*args, **kwargs)
 
             engine_core.run_busy_loop()
 
