@@ -265,6 +265,7 @@ class EngineCore:
             # error from execute_model itself.
 
             # NOTE: This method is exception-free
+            logger.warning("Error!!!!!")
             dump_engine_exception(self.vllm_config, scheduler_output,
                                   self.scheduler.make_stats())
             raise err

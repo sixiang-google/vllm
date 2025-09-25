@@ -242,9 +242,13 @@ class InprocClient(EngineCoreClient):
     """
 
     def __init__(self, *args, **kwargs):
-        self.engine_core = EngineCore(*args, **kwargs)
+        logger.warning("initializing InprocClient")
+        from tpu_commons.core.core_tpu import DisaggEngineCore
+        self.engine_core = DisaggEngineCore(*args, **kwargs)
+        # self.engine_core = EngineCore(*args, **kwargs)
 
     def get_output(self) -> EngineCoreOutputs:
+        logger.warning("Getting output...")
         outputs, _ = self.engine_core.step_fn()
         return outputs and outputs.get(0) or EngineCoreOutputs()
 
