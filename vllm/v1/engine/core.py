@@ -700,7 +700,9 @@ class EngineCoreProc(EngineCore):
             else:
                 set_process_title("EngineCore")
                 decorate_logs()
-                engine_core = EngineCoreProc(*args, **kwargs)
+                from tpu_commons.core.core_tpu import DisaggEngineCoreProc
+                engine_core = DisaggEngineCoreProc(*args, **kwargs)
+                # engine_core = EngineCoreProc(*args, **kwargs)
 
             engine_core.run_busy_loop()
 
