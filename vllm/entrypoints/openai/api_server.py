@@ -644,9 +644,10 @@ async def create_chat_completion(request: ChatCompletionRequest,
 async def create_completion(request: CompletionRequest, raw_request: Request):
     handler = completion(raw_request)
     if handler is None:
-        return base(raw_request).create_error_response(
-            message="The model does not support Completions API")
-
+        error_response = base(raw_request).create_error_response(
+            message="The model does not support Completions API",
+            code=HTTPStatus.NOT_FOUND)
+        return JSONResponse(content=error_response.model_dump(), status_code=error_response.error.code)
     try:
         generator = await handler.create_completion(request, raw_request)
     except OverflowError as e:
