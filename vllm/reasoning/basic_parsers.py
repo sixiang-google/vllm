@@ -3,15 +3,20 @@
 
 from abc import abstractmethod
 from collections.abc import Sequence
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Any
 
-from vllm.entrypoints.openai.protocol import (
-    ChatCompletionRequest,
-    DeltaMessage,
-    ResponsesRequest,
-)
+from vllm.entrypoints.openai.protocol import DeltaMessage
 from vllm.reasoning.abs_reasoning_parsers import ReasoningParser
 from vllm.transformers_utils.tokenizer import AnyTokenizer
+
+if TYPE_CHECKING:
+    from vllm.entrypoints.openai.protocol import (
+        ChatCompletionRequest,
+        ResponsesRequest,
+    )
+else:
+    ChatCompletionRequest = Any
+    ResponsesRequest = Any
 
 
 class BaseThinkingReasoningParser(ReasoningParser):
@@ -79,7 +84,7 @@ class BaseThinkingReasoningParser(ReasoningParser):
         previous_token_ids: Sequence[int],
         current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
-    ) -> Union[DeltaMessage, None]:
+    ) -> DeltaMessage | None:
         """
         Extract reasoning content from a delta message.
         Handles streaming output where previous + delta = current.
@@ -135,8 +140,8 @@ class BaseThinkingReasoningParser(ReasoningParser):
             return DeltaMessage(content=delta_text)
 
     def extract_reasoning_content(
-        self, model_output: str, request: Union[ChatCompletionRequest, ResponsesRequest]
-    ) -> tuple[Optional[str], Optional[str]]:
+        self, model_output: str, request: ChatCompletionRequest | ResponsesRequest
+    ) -> tuple[str | None, str | None]:
         """
         Extract reasoning content from the model output.
 

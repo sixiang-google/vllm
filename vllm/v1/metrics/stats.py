@@ -4,8 +4,9 @@
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
+import vllm.envs as envs
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 
 if TYPE_CHECKING:
@@ -126,6 +127,19 @@ class PrefixCacheStats(BaseCacheStats):
     preempted_hits: int = 0
     """The `hits` number for preempted requests."""
 
+    def record(self, num_tokens: int, num_hits: int, preempted: bool) -> None:
+        """Aggregate request information into the stats."""
+        if preempted:
+            # Previously preempted request
+            self.preempted_requests += 1
+            self.preempted_queries += num_tokens
+            self.preempted_hits += num_hits
+        else:
+            # New request
+            self.requests += 1
+            self.queries += num_tokens
+            self.hits += num_hits
+
 
 @dataclass
 class MultiModalCacheStats(BaseCacheStats):
@@ -151,11 +165,10 @@ class SchedulerStats:
     kv_cache_usage: float = 0.0
 
     prefix_cache_stats: PrefixCacheStats = field(default_factory=PrefixCacheStats)
+    connector_prefix_cache_stats: PrefixCacheStats | None = None
 
-    spec_decoding_stats: Optional[SpecDecodingStats] = None
-    kv_connector_stats: Optional[dict[str, Any]] = None
-
-    num_corrupted_reqs: int = 0
+    spec_decoding_stats: SpecDecodingStats | None = None
+    kv_connector_stats: dict[str, Any] | None = None
 
 
 @dataclass
@@ -182,6 +195,9 @@ class RequestStateStats:
     # first token latency
     first_token_latency: float = 0.0
 
+    # Track if this request is corrupted (NaNs in logits)
+    is_corrupted: bool = False
+
 
 @dataclass
 class FinishedRequestStats:
@@ -191,12 +207,13 @@ class FinishedRequestStats:
     e2e_latency: float = 0.0
     num_prompt_tokens: int = 0
     num_generation_tokens: int = 0
-    max_tokens_param: Optional[int] = None
+    max_tokens_param: int | None = None
     queued_time: float = 0.0
     prefill_time: float = 0.0
     inference_time: float = 0.0
     decode_time: float = 0.0
     mean_time_per_output_token: float = 0.0
+    is_corrupted: bool = False
 
 
 class IterationStats:
@@ -214,6 +231,7 @@ class IterationStats:
         self.inter_token_latencies_iter: list[float] = []
         self.waiting_lora_adapters: dict[str, int] = {}
         self.running_lora_adapters: dict[str, int] = {}
+        self.num_corrupted_reqs: int = 0
 
     def __repr__(self) -> str:
         field_to_value_str = ", ".join(f"{k}={v}" for k, v in vars(self).items())
@@ -230,7 +248,7 @@ class IterationStats:
         is_prefilling: bool,
         prompt_len: int,
         req_stats: RequestStateStats,
-        lora_stats: Optional[LoRAStats],
+        lora_stats: LoRAStats | None,
     ):
         num_new_generation_tokens = len(output.new_token_ids)
 
@@ -243,6 +261,15 @@ class IterationStats:
             req_stats.first_token_latency = first_token_latency
 
         req_stats.num_generation_tokens += num_new_generation_tokens
+
+        # Track if this request is corrupted (only check once per request)
+        # Early exit if already marked as corrupted to avoid redundant checks
+        if (
+            envs.VLLM_COMPUTE_NANS_IN_LOGITS
+            and not req_stats.is_corrupted
+            and output.num_nans_in_logits > 0
+        ):
+            req_stats.is_corrupted = True
 
         # Process request-level engine core events
         if output.events is not None:
@@ -265,7 +292,7 @@ class IterationStats:
         events: list["EngineCoreEvent"],
         is_prefilling: bool,
         req_stats: RequestStateStats,
-        lora_stats: Optional[LoRAStats],
+        lora_stats: LoRAStats | None,
     ):
         # Avoid circular dependency
         from vllm.v1.engine import EngineCoreEventType
@@ -287,7 +314,7 @@ class IterationStats:
         self,
         finish_reason: "FinishReason",
         num_prompt_tokens: int,
-        max_tokens_param: Optional[int],
+        max_tokens_param: int | None,
         req_stats: RequestStateStats,
     ):
         e2e_latency = self._time_since(req_stats.arrival_time)
@@ -325,8 +352,13 @@ class IterationStats:
             inference_time=inference_time,
             decode_time=decode_time,
             mean_time_per_output_token=mean_time_per_output_token,
+            is_corrupted=req_stats.is_corrupted,
         )
         self.finished_requests.append(finished_req)
+
+        # Count corrupted requests when they finish (only once per request)
+        if req_stats.is_corrupted:
+            self.num_corrupted_reqs += 1
 
 
 class LoRARequestStates:
@@ -335,7 +367,7 @@ class LoRARequestStates:
     def __init__(self):
         self.lora_name_to_stats: dict[str, LoRAStats] = {}
 
-    def get_stats(self, req_state: "RequestState") -> Optional[LoRAStats]:
+    def get_stats(self, req_state: "RequestState") -> LoRAStats | None:
         if req_state.lora_name is None:
             return None
         if req_state.lora_name not in self.lora_name_to_stats:
@@ -362,20 +394,20 @@ class LoRARequestStates:
     # Break the pattern for this lifecycle methods so we can
     # call this from IterationStats.update_from_events()
     @staticmethod
-    def scheduled_request(lora_stats: Optional[LoRAStats], request_id: str):
+    def scheduled_request(lora_stats: LoRAStats | None, request_id: str):
         if lora_stats is None:
             return
         lora_stats.waiting_requests.remove(request_id)
         lora_stats.running_requests.add(request_id)
 
     @staticmethod
-    def preempted_request(lora_stats: Optional[LoRAStats], request_id: str):
+    def preempted_request(lora_stats: LoRAStats | None, request_id: str):
         if lora_stats is None:
             return
         lora_stats.running_requests.remove(request_id)
         lora_stats.waiting_requests.add(request_id)
 
-    def update_iteration_stats(self, iteration_stats: Optional[IterationStats]):
+    def update_iteration_stats(self, iteration_stats: IterationStats | None):
         if iteration_stats is None:
             return
         for lora_name, stats in self.lora_name_to_stats.items():
