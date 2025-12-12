@@ -1148,8 +1148,11 @@ def _run_in_subprocess(fn: Callable[[], _T]) -> _T:
 
         # cannot use `sys.executable __file__` here because the script
         # contains relative imports
+        cmd_env = os.environ.copy()
+        cmd_env["PYTHONFAULTHANDLER"] = "1"
+        cmd_env["LD_DEBUG"] = "libs"
         returned = subprocess.run(
-            _SUBPROCESS_COMMAND, input=input_bytes, capture_output=True
+            _SUBPROCESS_COMMAND, input=input_bytes, capture_output=False, env=cmd_env
         )
 
         # check if the subprocess is successful
